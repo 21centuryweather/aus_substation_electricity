@@ -14,7 +14,7 @@ sys.path.append("/home/565/pv3484/aus_substation_electricity")
 %run /home/565/pv3484/aus_substation_electricity_old/import_substation.py
 
 
-    
+#    
 # ---Creating a function to filter substations by residential fraction range --
 import pandas as pd
 
