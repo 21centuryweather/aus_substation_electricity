@@ -1,0 +1,23 @@
+Batch run started at 2025-12-10 12:19:11.625568
+
+✅ Saved: /home/565/pv3484/aus_substation_electricity/figures/map_animation/New_Year’s_Day/sydney_demand_2004-01-01_normalized.gif
+✅ Saved: /home/565/pv3484/aus_substation_electricity/figures/map_animation/New_Year’s_Day/sydney_demand_2005-01-01_normalized.gif
+✅ Saved: /home/565/pv3484/aus_substation_electricity/figures/map_animation/New_Year’s_Day/sydney_demand_2006-01-01_normalized.gif
+✅ Saved: /home/565/pv3484/aus_substation_electricity/figures/map_animation/New_Year’s_Day/sydney_demand_2007-01-01_normalized.gif
+✅ Saved: /home/565/pv3484/aus_substation_electricity/figures/map_animation/New_Year’s_Day/sydney_demand_2008-01-01_normalized.gif
+✅ Saved: /home/565/pv3484/aus_substation_electricity/figures/map_animation/New_Year’s_Day/sydney_demand_2009-01-01_normalized.gif
+✅ Saved: /home/565/pv3484/aus_substation_electricity/figures/map_animation/New_Year’s_Day/sydney_demand_2010-01-01_normalized.gif
+✅ Saved: /home/565/pv3484/aus_substation_electricity/figures/map_animation/New_Year’s_Day/sydney_demand_2011-01-01_normalized.gif
+✅ Saved: /home/565/pv3484/aus_substation_electricity/figures/map_animation/New_Year’s_Day/sydney_demand_2012-01-01_normalized.gif
+✅ Saved: /home/565/pv3484/aus_substation_electricity/figures/map_animation/New_Year’s_Day/sydney_demand_2013-01-01_normalized.gif
+✅ Saved: /home/565/pv3484/aus_substation_electricity/figures/map_animation/New_Year’s_Day/sydney_demand_2014-01-01_normalized.gif
+✅ Saved: /home/565/pv3484/aus_substation_electricity/figures/map_animation/New_Year’s_Day/sydney_demand_2015-01-01_normalized.gif
+✅ Saved: /home/565/pv3484/aus_substation_electricity/figures/map_animation/New_Year’s_Day/sydney_demand_2016-01-01_normalized.gif
+✅ Saved: /home/565/pv3484/aus_substation_electricity/figures/map_animation/New_Year’s_Day/sydney_demand_2017-01-01_normalized.gif
+✅ Saved: /home/565/pv3484/aus_substation_electricity/figures/map_animation/Australia_Day/sydney_demand_2004-01-26_normalized.gif
+✅ Saved: /home/565/pv3484/aus_substation_electricity/figures/map_animation/Australia_Day/sydney_demand_2005-01-26_normalized.gif
+✅ Saved: /home/565/pv3484/aus_substation_electricity/figures/map_animation/Australia_Day/sydney_demand_2006-01-26_normalized.gif
+✅ Saved: /home/565/pv3484/aus_substation_electricity/figures/map_animation/Australia_Day/sydney_demand_2007-01-26_normalized.gif
+✅ Saved: /home/565/pv3484/aus_substation_electricity/figures/map_animation/Australia_Day/sydney_demand_2008-01-26_normalized.gif
+✅ Saved: /home/565/pv3484/aus_substation_electricity/figures/map_animation/Australia_Day/sydney_demand_2009-01-26_normalized.gif
+✅ Saved: /home/565/pv3484/aus_substation_electricity/figures/map_animation/Australia_Day/sydney_demand_2010-01-26_normalized.gif
