@@ -1,5 +1,6 @@
 data/ausgrid/*.csv
 data/ausgrid/ausgrid.zip
+data/*
 
 
 # Byte-compiled / optimized / DLL files
