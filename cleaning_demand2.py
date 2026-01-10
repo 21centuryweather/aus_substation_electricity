@@ -211,6 +211,53 @@ def select_sites(info, area_min=0, res_min=0, res_max=1, com_min=0, com_max=1,
 
     return filtered.index.to_list()
 
+#------------------------- SAVING CLEANED DATA TO FOLDERS IN 
+
+def save_cleaned_state(
+    state,
+    state_dir,
+    metadata_path,
+    output_root,
+    sigma=None,
+    remove_constant=False,
+    fill_small_gaps=False,
+    max_gap=4,
+    landuse_filters=None
+):
+    """
+    Load, clean, optionally filter, and save cleaned demand + metadata
+    for a given state (QLD or VIC).
+    """
+
+    # 1. Load raw state data
+    demand, meta = load_state_demand_and_metadata(state, state_dir, metadata_path)
+
+    # 2. Optional cleaning
+    if sigma is not None:
+        demand = clean_data_sigma(demand, sigma=sigma)
+
+    if remove_constant:
+        demand = clean_data_constant(demand)
+
+    if fill_small_gaps:
+        demand = demand.apply(linearly_fill_gaps, max_gap=max_gap)
+
+    # 3. Optional land-use filtering
+    if landuse_filters is not None:
+        selected_ids = select_sites(meta, **landuse_filters)
+        demand = demand[selected_ids]
+        meta = meta.loc[selected_ids]
+
+    # REQUIRED MODIFICATION:
+    # Create cleaned_data/QLD or cleaned_data/VIC automatically
+    # ---------------------------------------------------------
+    out_dir = Path(output_root) / state
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # 5. Save outputs
+    demand.to_csv(out_dir / "demand.csv")
+    meta.to_csv(out_dir / "metadata.csv")
+
 # ---------------------------------------------------------------------
 # 5. SAVE CLEANED STATE DATA
 # ---------------------------------------------------------------------
