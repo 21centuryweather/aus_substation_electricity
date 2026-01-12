@@ -1,0 +1,202 @@
+
+__title__ = "Clean QLD 1/2 hourly electricity demand data and process with metadata"
+__author__ = "Pia Vassallo"
+__version__ = "2026_09_01"
+__email__ = "pvas0009@student.monash.edu"
+
+"""
+Clean and load CSIRO NEAR substation electricity demand data
+for Brisbane (QLD).
+
+This module provides:
+- load_supplier_demand_and_metadata()
+- load_state_demand_and_metadata()
+- clean_data_sigma()
+- clean_data_constant()
+- linearly_fill_gaps()
+- select_sites()
+- save_cleaned_state()
+
+No printing, no logging, no script execution on import.
+"""
+from pathlib import Path
+import pandas as pd
+import numpy as np
+
+
+# ---------------------------------------------------------
+# 1. Load a single QLD supplier (Energex or Ergon)
+# ---------------------------------------------------------
+
+def load_supplier_demand_and_metadata_QD(supplier_csv, metadata_df):
+    df = pd.read_csv(supplier_csv)
+
+    # Drop Ergon junk columns
+    df = df.drop(columns=["Unnamed: 2", "Usage"], errors="ignore")
+
+    # Timestamp detection
+    possible_time_cols = [
+        "StartDeliveryTime",  # Energex NEAR
+        "Start",              # Ergon
+        "t_start",
+        "DateTime",
+        "IntervalStart"
+    ]
+
+    time_col = next((c for c in possible_time_cols if c in df.columns), None)
+    if time_col is None:
+        raise KeyError(f"No usable timestamp column in {supplier_csv}")
+
+    df[time_col] = pd.to_datetime(df[time_col], errors="coerce")
+    df = df.dropna(subset=[time_col]).set_index(time_col)
+
+    # Drop metadata columns (Energex)
+    df = df.drop(columns=["EndDeliveryTime", "UtilityName"], errors="ignore")
+
+    # Extract IDs
+    clean_cols = []
+    for col in df.columns:
+        if "|" in col:
+            clean_cols.append(col.split("|")[0].replace("'", ""))
+        else:
+            clean_cols.append(col)
+
+    df.columns = clean_cols
+
+    # Align metadata
+    if "Zone Substation ID" in metadata_df.columns:
+        metadata_df = metadata_df.rename(columns={"Zone Substation ID": "ID"})
+
+    meta_subset = metadata_df[metadata_df["ID"].isin(clean_cols)].copy()
+
+    return df, meta_subset
+
+
+# ---------------------------------------------------------
+# 2. Load all QLD suppliers
+# ---------------------------------------------------------
+
+def load_state_demand_and_metadata_QD(state_dir, metadata_path):
+    metadata_df = pd.read_csv(metadata_path)
+
+    dnsps = ["Energex", "Ergon"]
+    meta_state = metadata_df[
+        metadata_df["Distribution Network Service Provider"].isin(dnsps)
+    ].copy()
+
+    demand_list = []
+    meta_list = []
+
+    for supplier_folder in Path(state_dir).iterdir():
+
+        if not supplier_folder.is_dir():
+            continue
+
+        # Skip AC-estimated folder
+        if "AC_QLD" in supplier_folder.name:
+            continue
+
+        for csv_file in supplier_folder.glob("*.csv"):
+
+            # Skip AC-estimated files
+            if "AC_filtered" in csv_file.name:
+                continue
+
+            demand_df, meta_subset = load_supplier_demand_and_metadata_QD(
+                csv_file, meta_state
+            )
+            demand_list.append(demand_df)
+            meta_list.append(meta_subset)
+
+    combined_demand = pd.concat(demand_list, axis=1)
+    combined_meta = pd.concat(meta_list).drop_duplicates(subset="ID")
+
+    return combined_demand, combined_meta
+
+
+# ---------------------------------------------------------
+# 3. Cleaning functions
+# ---------------------------------------------------------
+
+def clean_data_sigma(df, sigma=5):
+    mean = df.mean()
+    std = df.std()
+    lower = mean - sigma * std
+    upper = mean + sigma * std
+    return df.where((df > lower) & (df < upper))
+
+
+def clean_data_constant(df, window="2h"):
+    std = df.rolling(window=window).std()
+    mean = df.mean()
+    return df.where(std > mean / 1000)
+
+
+def linearly_fill_gaps(ser_to_fill: pd.Series, max_gap=4) -> pd.Series:
+    new_group_list = []
+    ser_test = ser_to_fill.copy()
+
+    if max_gap < len(ser_test):
+        isna = pd.Series(np.where(ser_test.isna(), 1, np.nan), index=ser_test.index)
+        isna_sum = isna.copy()
+        for n in range(1, max_gap + 1):
+            isna_sum = isna_sum + isna.shift(n)
+        break_idxs = isna_sum.dropna().index
+
+        prev_break = ser_test.index[0]
+        for next_break in break_idxs:
+            group = ser_test[prev_break:next_break]
+            if group.count() == 0:
+                continue
+            new_group = group.interpolate(method="linear", limit=max_gap, limit_area="inside")
+            new_group_list.append(new_group)
+            prev_break = next_break
+
+        group = ser_test[prev_break:]
+    else:
+        group = ser_test
+
+    new_group = group.interpolate(method="linear", limit=max_gap, limit_area="inside")
+    new_group_list.append(new_group)
+
+    filled = pd.concat(new_group_list).sort_index()
+    filled = filled[~filled.index.duplicated(keep="first")]
+    return filled
+
+
+# ---------------------------------------------------------
+# 4. Save cleaned QLD data
+# ---------------------------------------------------------
+
+def save_cleaned_state_QD(
+    state_dir,
+    metadata_path,
+    output_root,
+    sigma=None,
+    remove_constant=False,
+    fill_small_gaps=False,
+    max_gap=4,
+    landuse_filters=None
+):
+
+    demand, meta = load_state_demand_and_metadata_QD(state_dir, metadata_path)
+
+    if sigma is not None:
+        demand = clean_data_sigma(demand, sigma=sigma)
+
+    if remove_constant:
+        demand = clean_data_constant(demand)
+
+    if fill_small_gaps:
+        demand = demand.apply(linearly_fill_gaps, max_gap=max_gap)
+
+    if landuse_filters is not None:
+        selected_ids = select_sites(meta, **landuse_filters)
+        demand = demand[selected_ids]
+        meta = meta.loc[selected_ids]
+
+    out_dir = Path(output_root) / "QLD"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    demand.to_csv(out_dir / "demand.csv")
+    meta.to_csv(out_dir / "metadata.csv")
