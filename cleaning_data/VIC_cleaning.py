@@ -21,7 +21,7 @@ def load_supplier_demand_and_metadata_VIC(supplier_csv, metadata_df):
         raise KeyError(f"No usable timestamp column in {supplier_csv}")
 
     # Parse timestamps
-    df[time_col] = pd.to_datetime(df[time_col], errors="coerce")
+    df[time_col] = pd.to_datetime(df[time_col], format="%Y-%m-%d %H:%M:%S", errors="coerce")
     df = df.dropna(subset=[time_col])
     df = df.drop_duplicates(subset=[time_col])
     df = df.set_index(time_col)
