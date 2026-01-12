@@ -58,16 +58,17 @@ def load_state_demand_and_metadata_VIC(state_dir, metadata_path):
 
     for supplier_folder in Path(state_dir).iterdir():
 
-        if not supplier_folder.is_dir():
-            continue
+    if not supplier_folder.is_dir():
+        continue
 
-        for csv_file in supplier_folder.glob("*.csv"):
-            demand_df, meta_subset = load_supplier_demand_and_metadata_VIC(
-                csv_file, meta_state
-            )
-            demand_list.append(demand_df)
-            meta_list.append(meta_subset)
-
+    # NEW: recursively find all CSVs inside each DNSP folder
+    for csv_file in supplier_folder.rglob("*.csv"):
+        demand_df, meta_subset = load_supplier_demand_and_metadata_VIC(
+            csv_file, meta_state
+        )
+        demand_list.append(demand_df)
+        meta_list.append(meta_subset)
+    
     combined_demand = pd.concat(demand_list, axis=1)
     combined_meta = pd.concat(meta_list).drop_duplicates(subset="ID")
 
