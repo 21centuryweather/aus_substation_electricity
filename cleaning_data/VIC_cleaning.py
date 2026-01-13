@@ -1,27 +1,20 @@
-from pathlib import Path
 import pandas as pd
 import numpy as np
+from pathlib import Path
+import re
+from tqdm import tqdm
 
 
-# ---------------------------------------------------------
-# 1. Load a single VIC supplier file
-# ---------------------------------------------------------
+# --------------------------------------------
+# Load and clean one yearly CSV file
+# --------------------------------------------
 
-def load_supplier_demand_and_metadata_VIC(supplier_csv, metadata_df):
-    """
-    Load one VIC DNSP CSV and align it with metadata.
-    """
-
-    df = pd.read_csv(supplier_csv)
+def load_single_year_file(csv_path, metadata_df):
+    df = pd.read_csv(csv_path)
 
     # Identify timestamp column
-    possible_time_cols = ["StartDeliveryTime", "DateTime", "IntervalStart"]
-    time_col = next((c for c in possible_time_cols if c in df.columns), None)
-    if time_col is None:
-        raise KeyError(f"No usable timestamp column in {supplier_csv}")
-
-    # Parse timestamps
-    df[time_col] = pd.to_datetime(df[time_col], format="%Y-%m-%d %H:%M:%S", errors="coerce")
+    time_col = "StartDeliveryTime"
+    df[time_col] = pd.to_datetime(df[time_col], errors="coerce")
     df = df.dropna(subset=[time_col])
     df = df.drop_duplicates(subset=[time_col])
     df = df.set_index(time_col)
@@ -29,186 +22,131 @@ def load_supplier_demand_and_metadata_VIC(supplier_csv, metadata_df):
     # Drop irrelevant columns
     df = df.drop(columns=["EndDeliveryTime", "UtilityName"], errors="ignore")
 
-    # Clean column names (remove trailing metadata)
-    clean_cols = [col.split("|")[0].replace("'", "") for col in df.columns]
-    df.columns = clean_cols
+    # Clean column names
+    df.columns = [col.split("|")[0].replace("'", "").strip() for col in df.columns]
 
-    # Ensure metadata uses "ID"
-    if "Zone Substation ID" in metadata_df.columns:
-        metadata_df = metadata_df.rename(columns={"Zone Substation ID": "ID"})
-
-    # Subset metadata to only IDs present in this file
-    meta_subset = metadata_df[metadata_df["ID"].isin(clean_cols)].copy()
+    # Subset metadata
+    meta_subset = metadata_df[metadata_df["ID"].isin(df.columns)].copy()
 
     return df, meta_subset
 
 
-# ---------------------------------------------------------
-# 2. Load all VIC DNSPs
-# ---------------------------------------------------------
-
-def load_state_demand_and_metadata_VIC(state_dir, metadata_path):
-    """
-    Load all VIC DNSP CSVs and combine into one demand + metadata set.
-    """
-
-    metadata_df = pd.read_csv(metadata_path)
-
-    # VIC DNSPs
-    dnsps = ["AusNet", "CitiPower", "Powercor", "Jemena", "United Energy"]
-
-    # Filter metadata to VIC only
-    meta_state = metadata_df[
-        metadata_df["Distribution Network Service Provider"].isin(dnsps)
-    ].copy()
-
-    demand_list = []
-    meta_list = []
-
-    for supplier_folder in Path(state_dir).iterdir():
-        if not supplier_folder.is_dir():
-            continue
-
-        # Recursively find all CSVs
-        for csv_file in supplier_folder.rglob("*.csv"):
-            demand_df, meta_subset = load_supplier_demand_and_metadata_VIC(
-                csv_file, meta_state
-            )
-            demand_list.append(demand_df)
-            meta_list.append(meta_subset)
-
-    combined_demand = pd.concat(demand_list, axis=1)
-    combined_meta = pd.concat(meta_list).drop_duplicates(subset="ID")
-
-    return combined_demand, combined_meta
-
-
-# ---------------------------------------------------------
-# 3. Cleaning functions
-# ---------------------------------------------------------
+# --------------------------------------------
+# Cleaning functions
+# --------------------------------------------
 
 def clean_data_sigma(df, sigma=5):
-    """Remove values outside ±sigma standard deviations."""
     mean = df.mean()
     std = df.std()
     lower = mean - sigma * std
     upper = mean + sigma * std
-    return df.where((df > lower) & (df < upper))
+
+    cleaned = pd.DataFrame(index=df.index)
+    for col in tqdm(df.columns, desc="Sigma cleaning", unit="col"):
+        cleaned[col] = df[col].where((df[col] > lower[col]) & (df[col] < upper[col]))
+    return cleaned
 
 
 def clean_data_constant(df, window="2h"):
-    """Remove values that are constant over a rolling window."""
-    std = df.rolling(window=window).std()
+    cleaned = pd.DataFrame(index=df.index)
     mean = df.mean()
-    return df.where(std > mean / 1000)
+
+    for col in tqdm(df.columns, desc="Constant-value cleaning", unit="col"):
+        std = df[col].rolling(window=window).std()
+        cleaned[col] = df[col].where(std > mean[col] / 1000)
+    return cleaned
 
 
-def linearly_fill_gaps(ser_to_fill: pd.Series, max_gap=4) -> pd.Series:
-    """Fill short gaps linearly (max_gap half-hour steps)."""
-
-    new_group_list = []
-    ser_test = ser_to_fill.copy()
-
-    if max_gap < len(ser_test):
-        isna = pd.Series(np.where(ser_test.isna(), 1, np.nan), index=ser_test.index)
-        isna_sum = isna.copy()
-        for n in range(1, max_gap + 1):
-            isna_sum = isna_sum + isna.shift(n)
-        break_idxs = isna_sum.dropna().index
-
-        prev_break = ser_test.index[0]
-        for next_break in break_idxs:
-            group = ser_test[prev_break:next_break]
-            if group.count() == 0:
-                continue
-            new_group = group.interpolate(method="linear", limit=max_gap, limit_area="inside")
-            new_group_list.append(new_group)
-            prev_break = next_break
-
-        group = ser_test[prev_break:]
-    else:
-        group = ser_test
-
-    new_group = group.interpolate(method="linear", limit=max_gap, limit_area="inside")
-    new_group_list.append(new_group)
-
-    filled = pd.concat(new_group_list).sort_index()
-    filled = filled[~filled.index.duplicated(keep="first")]
-
+def linearly_fill_gaps(ser, max_gap=4):
+    filled = ser.interpolate(method="linear", limit=max_gap, limit_area="inside")
     return filled
 
 
-# ---------------------------------------------------------
-# 4. Land-use site selection
-# ---------------------------------------------------------
-
-def select_sites(info,
-                 area_min=0,
-                 res_min=0, res_max=1,
-                 com_min=0, com_max=1,
-                 ind_min=0, ind_max=1,
-                 farm_max=1):
-    """Filter substations by land-use characteristics."""
-
-    sites = info[
-        (info["Area"] > area_min) &
-        (info["Residential"] > res_min) &
-        (info["Residential"] < res_max) &
-        (info["Commercial"] > com_min) &
-        (info["Commercial"] < com_max) &
-        (info["Industrial"] > ind_min) &
-        (info["Industrial"] < ind_max) &
-        (info["Primary Production"] < farm_max)
-    ].index.to_list()
-
-    return sites
+def fill_gaps_df(df, max_gap=4):
+    filled = pd.DataFrame(index=df.index)
+    for col in tqdm(df.columns, desc="Gap filling", unit="col"):
+        filled[col] = linearly_fill_gaps(df[col], max_gap=max_gap)
+    return filled
 
 
-# ---------------------------------------------------------
-# 5. Main VIC processing function
-# ---------------------------------------------------------
+# --------------------------------------------
+# Process all yearly files for one DNSP
+# --------------------------------------------
 
-def process_VIC_demand(
+def process_DNSP_years(
+    dnspsubfolder,
     state_dir,
     metadata_path,
     output_root,
-    sigma=None,
-    remove_constant=False,
-    fill_small_gaps=False,
-    max_gap=4,
-    landuse_filters=None
+    sigma=5,
+    remove_constant=True,
+    fill_small_gaps=True,
+    max_gap=4
 ):
-    """
-    Load, clean, filter, and save VIC substation demand + metadata.
-    Returns:
-        demand (DataFrame)
-        info (DataFrame)
-    """
+    print(f"\n--- Starting DNSP: {dnspsubfolder} ---")
 
-    # Load raw VIC data
-    demand, info = load_state_demand_and_metadata_VIC(state_dir, metadata_path)
+    # Setup paths
+    input_dir = Path(state_dir) / dnspsubfolder
+    output_dir = Path(output_root) / dnspsubfolder
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Cleaning pipeline
-    if sigma is not None:
-        demand = clean_data_sigma(demand, sigma=sigma)
+    # Load metadata
+    metadata_df = pd.read_csv(metadata_path)
+    if "Zone Substation ID" in metadata_df.columns:
+        metadata_df = metadata_df.rename(columns={"Zone Substation ID": "ID"})
 
-    if remove_constant:
-        demand = clean_data_constant(demand)
+    # Save metadata once
+    metadata_df[metadata_df["Distribution Network Service Provider"] == dnspsubfolder.split("_")[0]].to_csv(
+        output_dir / f"{dnspsubfolder}_metadata.csv", index=False
+    )
 
-    if fill_small_gaps:
-        demand = demand.apply(linearly_fill_gaps, max_gap=max_gap)
+    # Process each CSV file
+    csv_files = sorted(input_dir.glob("*.csv"))
+    for csv_file in csv_files:
+        print(f"\nProcessing file: {csv_file.name}")
 
-    # Land-use filtering
-    if landuse_filters is not None:
-        selected_ids = select_sites(info, **landuse_filters)
-        demand = demand.loc[:, demand.columns.isin(selected_ids)]
-        info = info.loc[selected_ids]
+        # Extract year using regex
+        match = re.search(r"(20\d{2})", csv_file.name)
+        if not match:
+            print(f"  Skipping {csv_file.name} — no year found")
+            continue
+        year = match.group(1)
 
-    # Save cleaned outputs
-    out_dir = Path(output_root) / "VIC"
-    out_dir.mkdir(parents=True, exist_ok=True)
+        # Load and clean
+        df, meta = load_single_year_file(csv_file, metadata_df)
 
-    demand.to_csv(out_dir / "demand.csv")
-    info.to_csv(out_dir / "metadata.csv")
+        if sigma is not None:
+            df = clean_data_sigma(df, sigma=sigma)
+        if remove_constant:
+            df = clean_data_constant(df)
+        if fill_small_gaps:
+            df = fill_gaps_df(df, max_gap=max_gap)
 
-    return demand, info
+        # Save cleaned output
+        out_path = output_dir / f"{dnspsubfolder}_{year}_cleaned.csv"
+        df.to_csv(out_path)
+        print(f"  Saved cleaned file: {out_path.name}")
+
+
+# --------------------------------------------
+# Run all VIC DNSPs
+# --------------------------------------------
+
+def process_all_VIC():
+    state_dir = "/home/565/pv3484/aus_substation_electricity/data/raw_data/VIC_demand"
+    metadata_path = "/home/565/pv3484/aus_substation_electricity/data/DNSP_Zone_Substation_Characteristics.csv"
+    output_root = "/home/565/pv3484/aus_substation_electricity/data/cleaned_data/VIC"
+
+    dnsps = ["CitiPower_VIC", "AusNet_VIC", "Jemena_VIC", "Powercor_VIC", "UnitedEnergy_VIC"]
+
+    for dnspsubfolder in dnsps:
+        process_DNSP_years(
+            dnspsubfolder=dnspsubfolder,
+            state_dir=state_dir,
+            metadata_path=metadata_path,
+            output_root=output_root,
+            sigma=5,
+            remove_constant=True,
+            fill_small_gaps=True,
+            max_gap=4
+        )
