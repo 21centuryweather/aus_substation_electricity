@@ -1,202 +1,162 @@
-
-__title__ = "Clean QLD 1/2 hourly electricity demand data and process with metadata"
-__author__ = "Pia Vassallo"
-__version__ = "2026_09_01"
-__email__ = "pvas0009@student.monash.edu"
-
-"""
-Clean and load CSIRO NEAR substation electricity demand data
-for Brisbane (QLD).
-
-This module provides:
-- load_supplier_demand_and_metadata()
-- load_state_demand_and_metadata()
-- clean_data_sigma()
-- clean_data_constant()
-- linearly_fill_gaps()
-- select_sites()
-- save_cleaned_state()
-
-No printing, no logging, no script execution on import.
-"""
-from pathlib import Path
 import pandas as pd
 import numpy as np
+from pathlib import Path
+import re
+from tqdm import tqdm
 
 
-# ---------------------------------------------------------
-# 1. Load a single QLD supplier (Energex or Ergon)
-# ---------------------------------------------------------
+# --------------------------------------------
+# Load and clean one yearly CSV file
+# --------------------------------------------
 
-def load_supplier_demand_and_metadata_QD(supplier_csv, metadata_df):
-    df = pd.read_csv(supplier_csv)
+def load_single_year_file(csv_path, metadata_df):
+    df = pd.read_csv(csv_path)
 
-    # Drop Ergon junk columns
-    df = df.drop(columns=["Unnamed: 2", "Usage"], errors="ignore")
-
-    # Timestamp detection
-    possible_time_cols = [
-        "StartDeliveryTime",  # Energex NEAR
-        "Start",              # Ergon
-        "t_start",
-        "DateTime",
-        "IntervalStart"
-    ]
-
-    time_col = next((c for c in possible_time_cols if c in df.columns), None)
-    if time_col is None:
-        raise KeyError(f"No usable timestamp column in {supplier_csv}")
-
+    # Identify timestamp column
+    time_col = "StartDeliveryTime"
     df[time_col] = pd.to_datetime(df[time_col], errors="coerce")
-    df = df.dropna(subset=[time_col]).set_index(time_col)
+    df = df.dropna(subset=[time_col])
+    df = df.drop_duplicates(subset=[time_col])
+    df = df.set_index(time_col)
 
-    # Drop metadata columns (Energex)
+    # Drop irrelevant columns
     df = df.drop(columns=["EndDeliveryTime", "UtilityName"], errors="ignore")
 
-    # Extract IDs
-    clean_cols = []
-    for col in df.columns:
-        if "|" in col:
-            clean_cols.append(col.split("|")[0].replace("'", ""))
-        else:
-            clean_cols.append(col)
+    # Clean column names
+    df.columns = [col.split("|")[0].replace("'", "").strip() for col in df.columns]
 
-    df.columns = clean_cols
-
-    # Align metadata
-    if "Zone Substation ID" in metadata_df.columns:
-        metadata_df = metadata_df.rename(columns={"Zone Substation ID": "ID"})
-
-    meta_subset = metadata_df[metadata_df["ID"].isin(clean_cols)].copy()
+    # Subset metadata
+    meta_subset = metadata_df[metadata_df["ID"].isin(df.columns)].copy()
 
     return df, meta_subset
 
 
-# ---------------------------------------------------------
-# 2. Load all QLD suppliers
-# ---------------------------------------------------------
-
-def load_state_demand_and_metadata_QD(state_dir, metadata_path):
-    metadata_df = pd.read_csv(metadata_path)
-
-    dnsps = ["Energex", "Ergon"]
-    meta_state = metadata_df[
-        metadata_df["Distribution Network Service Provider"].isin(dnsps)
-    ].copy()
-
-    demand_list = []
-    meta_list = []
-
-    for supplier_folder in Path(state_dir).iterdir():
-
-        if not supplier_folder.is_dir():
-            continue
-
-        # Skip AC-estimated folder
-        if "AC_QLD" in supplier_folder.name:
-            continue
-
-        for csv_file in supplier_folder.glob("*.csv"):
-
-            # Skip AC-estimated files
-            if "AC_filtered" in csv_file.name:
-                continue
-
-            demand_df, meta_subset = load_supplier_demand_and_metadata_QD(
-                csv_file, meta_state
-            )
-            demand_list.append(demand_df)
-            meta_list.append(meta_subset)
-
-    combined_demand = pd.concat(demand_list, axis=1)
-    combined_meta = pd.concat(meta_list).drop_duplicates(subset="ID")
-
-    return combined_demand, combined_meta
-
-
-# ---------------------------------------------------------
-# 3. Cleaning functions
-# ---------------------------------------------------------
+# --------------------------------------------
+# Cleaning functions
+# --------------------------------------------
 
 def clean_data_sigma(df, sigma=5):
     mean = df.mean()
     std = df.std()
     lower = mean - sigma * std
     upper = mean + sigma * std
-    return df.where((df > lower) & (df < upper))
+
+    cleaned = pd.DataFrame(index=df.index)
+    for col in tqdm(df.columns, desc="Sigma cleaning", unit="col"):
+        cleaned[col] = df[col].where((df[col] > lower[col]) & (df[col] < upper[col]))
+    return cleaned
 
 
 def clean_data_constant(df, window="2h"):
-    std = df.rolling(window=window).std()
+    cleaned = pd.DataFrame(index=df.index)
     mean = df.mean()
-    return df.where(std > mean / 1000)
+
+    for col in tqdm(df.columns, desc="Constant-value cleaning", unit="col"):
+        std = df[col].rolling(window=window).std()
+        cleaned[col] = df[col].where(std > mean[col] / 1000)
+    return cleaned
 
 
-def linearly_fill_gaps(ser_to_fill: pd.Series, max_gap=4) -> pd.Series:
-    new_group_list = []
-    ser_test = ser_to_fill.copy()
-
-    if max_gap < len(ser_test):
-        isna = pd.Series(np.where(ser_test.isna(), 1, np.nan), index=ser_test.index)
-        isna_sum = isna.copy()
-        for n in range(1, max_gap + 1):
-            isna_sum = isna_sum + isna.shift(n)
-        break_idxs = isna_sum.dropna().index
-
-        prev_break = ser_test.index[0]
-        for next_break in break_idxs:
-            group = ser_test[prev_break:next_break]
-            if group.count() == 0:
-                continue
-            new_group = group.interpolate(method="linear", limit=max_gap, limit_area="inside")
-            new_group_list.append(new_group)
-            prev_break = next_break
-
-        group = ser_test[prev_break:]
-    else:
-        group = ser_test
-
-    new_group = group.interpolate(method="linear", limit=max_gap, limit_area="inside")
-    new_group_list.append(new_group)
-
-    filled = pd.concat(new_group_list).sort_index()
-    filled = filled[~filled.index.duplicated(keep="first")]
+def linearly_fill_gaps(ser, max_gap=4):
+    filled = ser.interpolate(method="linear", limit=max_gap, limit_area="inside")
     return filled
 
 
-# ---------------------------------------------------------
-# 4. Save cleaned QLD data
-# ---------------------------------------------------------
+def fill_gaps_df(df, max_gap=4):
+    filled = pd.DataFrame(index=df.index)
+    for col in tqdm(df.columns, desc="Gap filling", unit="col"):
+        filled[col] = linearly_fill_gaps(df[col], max_gap=max_gap)
+    return filled
 
-def save_cleaned_state_QD(
+
+# --------------------------------------------
+# Process all yearly files for one DNSP
+# --------------------------------------------
+
+def process_DNSP_years(
+    dnspsubfolder,
     state_dir,
     metadata_path,
     output_root,
-    sigma=None,
-    remove_constant=False,
-    fill_small_gaps=False,
-    max_gap=4,
-    landuse_filters=None
+    sigma=5,
+    remove_constant=True,
+    fill_small_gaps=True,
+    max_gap=4
 ):
+    print(f"\n--- Starting DNSP: {dnspsubfolder} ---")
 
-    demand, meta = load_state_demand_and_metadata_QD(state_dir, metadata_path)
+    # Setup paths
+    input_dir = Path(state_dir) / dnspsubfolder
+    output_dir = Path(output_root) / dnspsubfolder
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-    if sigma is not None:
-        demand = clean_data_sigma(demand, sigma=sigma)
+    # Load metadata
+    metadata_df = pd.read_csv(metadata_path)
+    if "Zone Substation ID" in metadata_df.columns:
+        metadata_df = metadata_df.rename(columns={"Zone Substation ID": "ID"})
 
-    if remove_constant:
-        demand = clean_data_constant(demand)
+    # Save metadata once
+    metadata_df[metadata_df["Distribution Network Service Provider"] == dnspsubfolder.split("_")[0]].to_csv(
+        output_dir / f"{dnspsubfolder}_metadata.csv", index=False
+    )
 
-    if fill_small_gaps:
-        demand = demand.apply(linearly_fill_gaps, max_gap=max_gap)
+    # Process each CSV file
+    csv_files = sorted(input_dir.glob("*.csv"))
+    for csv_file in csv_files:
+        print(f"\nProcessing file: {csv_file.name}")
+    
+        # Skip the broken 2008 file explicitly
+        if csv_file.name == "collated_deduplicated_ergon_2008_mw_30min.csv":
+            print(f"  Skipping {csv_file.name} — excluded due to missing data")
+            continue
+    
+        # Extract year using regex
+        match = re.search(r"(20\d{2})", csv_file.name)
+        if not match:
+            print(f"  Skipping {csv_file.name} — no year found")
+            continue
+        year = match.group(1)
+    
+        # Load file safely
+        try:
+            df, meta = load_single_year_file(csv_file, metadata_df)
+        except Exception as e:
+            print(f"  Skipping {csv_file.name} — failed to load ({e})")
+            continue
+    
+        # Apply cleaning
+        if sigma is not None:
+            df = clean_data_sigma(df, sigma=sigma)
+        if remove_constant:
+            df = clean_data_constant(df)
+        if fill_small_gaps:
+            df = fill_gaps_df(df, max_gap=max_gap)
+    
+        # Save cleaned output
+        out_path = output_dir / f"{dnspsubfolder}_{year}_cleaned.csv"
+        df.to_csv(out_path)
+        print(f"  Saved cleaned file: {out_path.name}")
+    
 
-    if landuse_filters is not None:
-        selected_ids = select_sites(meta, **landuse_filters)
-        demand = demand[selected_ids]
-        meta = meta.loc[selected_ids]
+# --------------------------------------------
+# Run all VIC DNSPs
+# --------------------------------------------
 
-    out_dir = Path(output_root) / "QLD"
-    out_dir.mkdir(parents=True, exist_ok=True)
+def process_all_VIC():
+    state_dir = "/home/565/pv3484/aus_substation_electricity/data/raw_data/QLD_demand"
+    metadata_path = "/home/565/pv3484/aus_substation_electricity/data/DNSP_Zone_Substation_Characteristics.csv"
+    output_root = "/home/565/pv3484/aus_substation_electricity/data/cleaned_data/QLD"
 
-    demand.to_csv(out_dir / "demand.csv")
-    meta.to_csv(out_dir / "metadata.csv")
+    dnsps = ["Energex_QLD", "Ergon_network_QLD"]
+
+    for dnspsubfolder in dnsps:
+        process_DNSP_years(
+            dnspsubfolder=dnspsubfolder,
+            state_dir=state_dir,
+            metadata_path=metadata_path,
+            output_root=output_root,
+            sigma=5,
+            remove_constant=True,
+            fill_small_gaps=True,
+            max_gap=4
+        )
