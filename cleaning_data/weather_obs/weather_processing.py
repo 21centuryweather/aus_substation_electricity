@@ -1,187 +1,162 @@
+"""
+weather_processing.py
+
+Memory-safe processing of BOM HD01D station metadata and observational data.
+
+- Extracts all ZIPs
+- Streams ALL station metadata to a single CSV
+- Streams ALL observational data to a single CSV
+- No bounding-box filtering
+- No in-memory concatenation of all observations
+"""
+
 from pathlib import Path
 import pandas as pd
 import zipfile
-import logging
 from tqdm import tqdm
 
 
 # ------------------------------------------------------------
-# LOGGING SETUP
+# 1. ZIP extraction
 # ------------------------------------------------------------
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-
-# You can configure handlers in your notebook or main script:
-# logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-
-
-# ------------------------------------------------------------
-# 1. ZIP EXTRACTION
-# ------------------------------------------------------------
-
-def extract_all_zips(region_path: Path):
+def extract_zip(zip_path: Path) -> Path:
     """
-    Extract all ZIP files inside a region directory.
-    Returns a list of extracted directory paths.
+    Extract a single ZIP file into a folder with the same name (no .zip).
+    Returns the extraction directory.
     """
-    zip_files = list(region_path.glob("*.zip"))
+    extract_dir = zip_path.with_suffix("")
+    extract_dir.mkdir(exist_ok=True)
+
+    with zipfile.ZipFile(zip_path, "r") as z:
+        z.extractall(extract_dir)
+
+    return extract_dir
+
+
+def extract_all_zips(raw_dir: Path) -> list[Path]:
+    """
+    Extract all ZIPs in a directory.
+    Returns a list of extracted directories.
+    """
+    zip_files = sorted(raw_dir.glob("*.zip"))
     extracted_dirs = []
 
-    logger.info(f"Found {len(zip_files)} ZIP files in {region_path}")
-
     for z in tqdm(zip_files, desc="Extracting ZIPs"):
-        out_dir = z.with_suffix("")
-        if not out_dir.exists():
-            logger.info(f"Extracting {z.name} → {out_dir}")
-            with zipfile.ZipFile(z, "r") as zip_ref:
-                zip_ref.extractall(out_dir)
-        else:
-            logger.info(f"Already extracted: {z.name}")
-        extracted_dirs.append(out_dir)
+        extracted_dirs.append(extract_zip(z))
 
     return extracted_dirs
 
 
 # ------------------------------------------------------------
-# 2. LOAD STATION METADATA
+# 2. Station metadata (streamed to CSV)
 # ------------------------------------------------------------
 
-STATION_COLS = [
-    "record_type", "site_id", "site_num", "site_name", "start_date",
-    "lat", "lon", "location_method", "state", "elev", "bar_ht", "wmo_id",
-    "start_year", "end_year", "percent_complete", "percent_quality",
-    "has_rain", "has_temp", "unknown1", "has_wind", "unknown2", "end_marker"
-]
-
-
-def load_station_metadata(extracted_dirs):
+def process_all_station_metadata(extracted_dirs: list[Path], out_path: Path) -> Path:
     """
-    Load all station metadata files from extracted ZIP directories.
+    Load all HD01D_StnDet files and stream them into a single CSV.
+    Returns the output CSV path.
     """
-    frames = []
+    stn_files = []
+    for d in extracted_dirs:
+        stn_files.extend(d.glob("HD01D_StnDet_*.txt"))
 
-    logger.info("Loading station metadata files")
+    header_written = False
 
-    for d in tqdm(extracted_dirs, desc="Reading station metadata"):
-        stn_files = list(d.glob("HD01D_StnDet_*.txt"))
-        if not stn_files:
-            logger.warning(f"No station metadata file found in {d}")
-            continue
-
-        logger.info(f"Reading station metadata: {stn_files[0].name}")
-
+    for f in tqdm(stn_files, desc="Processing station metadata"):
         df = pd.read_csv(
-            stn_files[0],
+            f,
             sep=",",
             header=None,
             skiprows=1,
-            engine="python"
+            engine="python",
+            encoding="utf-8"
         )
-        frames.append(df)
 
-    stations = pd.concat(frames, ignore_index=True)
-    stations.columns = STATION_COLS
+        n_cols = df.shape[1]
+        base_cols = ["station_number", "name", "lat", "lon"]
+        extra_cols = [f"extra_{i}" for i in range(n_cols - 4)]
+        df.columns = base_cols + extra_cols
 
-    logger.info(f"Loaded {len(stations)} station metadata rows")
+        df["lat"] = pd.to_numeric(df["lat"], errors="coerce")
+        df["lon"] = pd.to_numeric(df["lon"], errors="coerce")
 
-    return stations
+        df.to_csv(out_path, mode="a", index=False, header=not header_written)
+        header_written = True
 
-
-# ------------------------------------------------------------
-# 3. FILTER TO METRO STATIONS
-# ------------------------------------------------------------
-
-def filter_metro(stations, bbox):
-    """
-    Filter stations to those inside a bounding box.
-    bbox = (lat_min, lat_max, lon_min, lon_max)
-    """
-    lat_min, lat_max, lon_min, lon_max = bbox
-
-    logger.info("Filtering stations to metro bounding box")
-
-    metro = stations[
-        stations["lat"].astype(float).between(lat_min, lat_max)
-        & stations["lon"].astype(float).between(lon_min, lon_max)
-    ]
-
-    logger.info(f"Selected {len(metro)} metro stations")
-
-    return metro
+    return out_path
 
 
 # ------------------------------------------------------------
-# 4. LOAD OBSERVATIONAL DATA FOR METRO STATIONS
+# 3. Observational data (streamed to CSV)
 # ------------------------------------------------------------
 
-def load_metro_data(extracted_dirs, metro_ids):
+def process_all_observations(extracted_dirs: list[Path], out_path: Path, chunksize: int = 200_000) -> Path:
     """
-    Load all observational data files for the selected metro station IDs.
+    Load all HD01D_Data files and stream them into a single CSV.
+    Uses chunked reading to stay memory-safe.
+    Returns the output CSV path.
     """
-    dfs = []
-
-    logger.info(f"Loading observational data for {len(metro_ids)} metro stations")
-
+    data_files = []
     for d in extracted_dirs:
-        data_files = list(d.glob("HD01D_Data_*.txt"))
+        data_files.extend(d.glob("HD01D_Data_*.txt"))
 
-        for f in tqdm(data_files, desc=f"Reading data in {d.name}", leave=False):
-            station_id = int(f.name.split("_")[2])
-            if station_id in metro_ids:
-                logger.info(f"Reading data for station {station_id} from {f.name}")
-                df = pd.read_csv(f, sep="\t", engine="python", skiprows=1)
-                dfs.append(df)
+    header_written = False
 
-    if dfs:
-        combined = pd.concat(dfs, ignore_index=True)
-        logger.info(f"Loaded {len(combined)} observational rows")
-        return combined
+    for f in tqdm(data_files, desc="Processing observational data"):
+        # Chunked reading for memory safety
+        for chunk in pd.read_csv(
+            f,
+            sep=",",
+            header=None,
+            skiprows=1,
+            engine="python",
+            encoding="utf-8",
+            chunksize=chunksize
+        ):
+            n_cols = chunk.shape[1]
+            base_cols = ["station_number", "date"]
+            extra_cols = [f"var_{i}" for i in range(1, n_cols - 1)]
+            chunk.columns = base_cols + extra_cols
 
-    logger.warning("No observational data loaded")
-    return pd.DataFrame()
+            chunk.to_csv(out_path, mode="a", index=False, header=not header_written)
+            header_written = True
+
+    return out_path
 
 
 # ------------------------------------------------------------
-# 5. SAVE OUTPUTS
+# 4. Region processing pipeline (no filtering, streaming)
 # ------------------------------------------------------------
 
-def save_region_outputs(out_dir: Path, stations, data):
+def process_region(raw_dir: Path, bbox: tuple, out_dir: Path):
     """
-    Save filtered station metadata and observational data.
+    Full pipeline WITHOUT ANY FILTERING, memory-safe:
+
+    - extract ZIPs
+    - stream ALL station metadata to stations.csv
+    - stream ALL observations to observations.csv
+
+    The bbox argument is ignored (kept only for API compatibility).
+
+    Returns:
+        stations_csv_path, observations_csv_path
     """
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    logger.info(f"Saving station metadata → {out_dir / 'stations.csv'}")
-    stations.to_csv(out_dir / "stations.csv", index=False)
+    # 1. Extract ZIPs
+    extracted_dirs = extract_all_zips(raw_dir)
 
-    logger.info(f"Saving observational data → {out_dir / 'observations.csv'}")
-    data.to_csv(out_dir / "observations.csv", index=False)
+    # 2. Stream station metadata
+    stations_out = out_dir / "stations.csv"
+    if stations_out.exists():
+        stations_out.unlink()
+    stations_csv = process_all_station_metadata(extracted_dirs, stations_out)
 
+    # 3. Stream observations
+    obs_out = out_dir / "observations.csv"
+    if obs_out.exists():
+        obs_out.unlink()
+    obs_csv = process_all_observations(extracted_dirs, obs_out)
 
-# ------------------------------------------------------------
-# 6. END-TO-END REGION PROCESSOR
-# ------------------------------------------------------------
-
-def process_region(region_path: Path, bbox, output_path: Path):
-    """
-    Full pipeline:
-    - extract ZIPs
-    - load station metadata
-    - filter to metro stations
-    - load observational data
-    - save outputs
-    """
-    logger.info(f"Processing region: {region_path}")
-
-    extracted = extract_all_zips(region_path)
-    stations = load_station_metadata(extracted)
-    metro = filter_metro(stations, bbox)
-    metro_ids = metro["site_id"].astype(int).unique()
-    data = load_metro_data(extracted, metro_ids)
-
-    save_region_outputs(output_path, metro, data)
-
-    logger.info(f"Finished processing region: {region_path}")
-
-    return metro, data
+    return stations_csv, obs_csv
