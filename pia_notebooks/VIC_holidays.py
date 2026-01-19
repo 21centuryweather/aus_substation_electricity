@@ -1,7 +1,7 @@
-__title__: "Holiday Dictionary for Victoria"
-__purpose__: "Create a dictionary of all National and Victorian public holidays so I can call upon it in notebooks rather than copying and pasting the library each time"
+#__title__: "Holiday Dictionary for Victoria"
+#__purpose__: "Create a dictionary of all National and Victorian public holidays so I can call upon it in notebooks rather than copying and pasting the library each time"
 
-__Victorian_hoiday_list:
+#__Victorian_hoiday_list:
 # Labour Day is observed on the second Monday in March
 # Melbourne Cup is observed on the First Tuesday in November
 # AFL Grand Final (25/09/15, 30/09/16, 29/09/17)
@@ -11,6 +11,7 @@ __Victorian_hoiday_list:
 
 import pandas as pd
 from datetime import date, timedelta
+from dateutil.easter import easter
 
 def nth_weekday_of_month(year, month, weekday, n):
     """
@@ -112,5 +113,42 @@ HOLIDAYS_VIC = {
     "Boxing Day": lambda y: boxing_day_vic(y),
 }
 
+#--- Adding Function to generate holiday dates for range of years ---
+def build_vic_holiday_dict(start_year, end_year):
+    """
+    Convert HOLIDAYS_VIC (name → function) into a dictionary:
+    year → list of holiday timestamps
+    """
+    out = {}
 
+    for year in range(start_year, end_year + 1):
+        dates = []
+        for name, fn in HOLIDAYS_VIC.items():
+            ts = fn(year)
+            if pd.notna(ts):
+                dates.append(ts)
+        out[year] = sorted(dates)
+
+    return out
+
+# --- Mapping to group holiday name ---
+from VIC_holidays import HOLIDAYS_VIC
+
+def build_holiday_name_map(start_year, end_year):
+    """
+    Returns: {holiday_name: [Timestamp dates across years]}
+    """
+    out = {}
+
+    for name, fn in HOLIDAYS_VIC.items():
+        dates = []
+        for year in range(start_year, end_year + 1):
+            ts = fn(year)
+            if pd.notna(ts):
+                dates.append(ts)
+        out[name] = sorted(dates)
+
+    return out
+
+holiday_by_name = build_holiday_name_map(2004, 2018)
 
