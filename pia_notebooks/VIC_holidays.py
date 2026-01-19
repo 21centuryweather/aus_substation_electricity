@@ -100,6 +100,7 @@ HOLIDAYS_VIC = {
     "AFL Grand Final Eve": lambda y: afl_grand_final_eve(y),
 
     # Easter-related holidays
+    "Easter": easter,
     "Good Friday": lambda y: pd.Timestamp(easter(y)) - pd.Timedelta(days=2),
     "Easter Saturday": lambda y: pd.Timestamp(easter(y)) - pd.Timedelta(days=1),
     "Easter Sunday": lambda y: pd.Timestamp(easter(y)),
