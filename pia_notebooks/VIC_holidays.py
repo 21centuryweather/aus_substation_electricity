@@ -34,18 +34,20 @@ def melbourne_cup_vic(year):
     # First Tuesday in November
     return nth_weekday_of_month(year, 11, weekday=1, n=1)
 
+#--- AFL Grand Final Public Holiday only came in from 2015 ---
+
+AFL_GF_EVE_DATES = {
+    2015: pd.Timestamp("2015-10-02"),
+    2016: pd.Timestamp("2016-09-30"),
+    2017: pd.Timestamp("2017-09-29"),
+}
+
 def afl_grand_final_eve(year):
     """
-    AFL Grand Final Eve public holiday:
-    - The Grand Final is held on the last Saturday of September.
-    - The public holiday is the Friday immediately before.
+    Return the AFL Grand Final Eve public holiday for years it existed.
+    For all other years, return NaT.
     """
-    # Find last Saturday of September
-    last_day = date(year, 9, 30)
-    offset = (last_day.weekday() - 5) % 7  # Saturday = 5
-    grand_final_day = last_day - timedelta(days=offset)
-    grand_final_eve = grand_final_day - timedelta(days=1)
-    return pd.Timestamp(grand_final_eve)
+    return AFL_GF_EVE_DATES.get(year, pd.NaT)
 
 #--- Helper Function: Substitue Monday as the public holiday if the date falls on the weekend ---
 def substitute_if_weekend(ts):
@@ -59,7 +61,7 @@ def substitute_if_weekend(ts):
         return ts + pd.Timedelta(days=1)
     return ts
 
-#--- Christmas and Boxing Day substitute logic ---
+#--- Christmas, Boxing Day and Easter substitute logic ---
 def christmas_day_vic(year):
     ts = pd.Timestamp(f"{year}-12-25")
     return substitute_if_weekend(ts)
@@ -67,6 +69,14 @@ def christmas_day_vic(year):
 def boxing_day_vic(year):
     ts = pd.Timestamp(f"{year}-12-26")
     return substitute_if_weekend(ts)
+
+def new_years_day_vic(year):
+    ts = pd.Timestamp(f"{year}-01-01")
+    return substitute_if_weekend(ts)
+
+def australia_day_vic(year):
+    ts = pd.Timestamp(f"{year}-01-26")
+    return substitute_if_weekend(ts)    
 
 #--- Special Case: ANZAC Day 2011 was substitued to the Tuesday as it fell on Easter Monday ---
 def anzac_day_vic(year):
@@ -78,8 +88,9 @@ def anzac_day_vic(year):
 #---- Victorian Holiday Dictionary---
 
 HOLIDAYS_VIC = {
-    "New Year's Day": lambda y: pd.Timestamp(f"{y}-01-01"),
-    "Australia Day": lambda y: pd.Timestamp(f"{y}-01-26"),
+    # Holidays with substitute logic
+    "New Year's Day": lambda y: new_years_day_vic(y),
+    "Australia Day": lambda y: australia_day_vic(y),
 
     # Victorian-specific holidays
     "Labour Day": lambda y: labour_day_vic(y),
@@ -93,8 +104,10 @@ HOLIDAYS_VIC = {
     "Easter Sunday": lambda y: pd.Timestamp(easter(y)),
     "Easter Monday": lambda y: pd.Timestamp(easter(y)) + pd.Timedelta(days=1),
 
-    # Holidays with special substitute logic
+    # ANZAC Day (special case for 2011)
     "ANZAC Day": lambda y: anzac_day_vic(y),
+
+    # Christmas + Boxing Day with substitute logic
     "Christmas Day": lambda y: christmas_day_vic(y),
     "Boxing Day": lambda y: boxing_day_vic(y),
 }
