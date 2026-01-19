@@ -31,7 +31,7 @@ sdate,edate = None, None
 domains = ['nsw']
 
 #linearly fill gaps max size
-fill_gaps = False
+fill_gaps = True
 
 
 def get_demand_data(suppliers,domain,sdate,edate):
