@@ -1,29 +1,61 @@
+# metadata.py
+
 import pandas as pd
 from pathlib import Path
 
-import pandas as pd
+# Path to the Excel metadata file
+ALL_STATIONS_PATH = (
+    "/home/565/pv3484/aus_substation_electricity/data/raw_data/"
+    "All_weatherstations_information.xlsx"
+)
+
+
+def _clean_columns(df):
+    """
+    Standardize column names:
+    - strip whitespace
+    - lowercase
+    - replace spaces and slashes with underscores
+    - remove parentheses and '#_'
+    """
+    df.columns = (
+        df.columns
+        .str.strip()
+        .str.lower()
+        .str.replace(" ", "_")
+        .str.replace("/", "_")
+        .str.replace("(", "")
+        .str.replace(")", "")
+        .str.replace("#_", "")
+    )
+    return df
+
 
 def load_station_metadata(stndet_path):
     """
-    Load StnDet metadata which has NO header row.
-    Assign correct column names and create station_id.
+    Load StnDet metadata (no header) and merge with the Excel metadata file.
+    Ensures:
+        - station_id is consistent
+        - lat/lon/name always present when available
+        - column names cleaned and standardized
     """
 
-    # Load with no header
-    df = pd.read_csv(stndet_path, header=None, dtype=str)
+    # ---------------------------------------------------------
+    # Load StnDet (no header)
+    # ---------------------------------------------------------
+    stndet = pd.read_csv(stndet_path, header=None, dtype=str)
 
-    # Assign column names based on actual StnDet structure
-    df.columns = [
-        "record_type",      # st
-        "station_id",       # 085099
-        "district_code",    # 85
-        "name",             # POUND CREEK
-        "opened",           # 04/2007
-        "closed",           # NaN
-        "lat",              # -38.6297
-        "lon",              # 145.8107
-        "elev",             # blank
-        "state",            # VIC
+    stndet.columns = [
+        "record_type",
+        "station_id",
+        "district_code",
+        "name",
+        "opened",
+        "closed",
+        "lat",
+        "lon",
+        "elev",
+        "state",
         "col10",
         "col11",
         "wmo",
@@ -35,36 +67,59 @@ def load_station_metadata(stndet_path):
         "col18",
         "col19",
         "col20",
-        "col21"
+        "col21",
     ]
 
-    # Strip whitespace
-    df = df.apply(lambda col: col.str.strip() if col.dtype == "object" else col)
+    stndet = stndet.apply(lambda col: col.str.strip() if col.dtype == "object" else col)
+    stndet = _clean_columns(stndet)
 
-    return df
-    
-ALL_STATIONS_PATH = "/home/565/pv3484/aus_substation_electricity/data/raw_data/All_stations_information.xlsx"
-
-def resolve_station_metadata(station_id, stndet_df):
-    # Try StnDet first
-    row = stndet_df.loc[stndet_df["station_id"] == str(station_id)]
-    if not row.empty:
-        return row.iloc[0].to_dict()
-
-    # Fallback: All_stations_information.xlsx
+    # ---------------------------------------------------------
+    # Load Excel metadata
+    # ---------------------------------------------------------
     allstations = pd.read_excel(ALL_STATIONS_PATH, dtype=str)
-
-    allstations = allstations.rename(columns={
-        "Station_number": "station_id",
-        "Station_name": "name"
-    })
 
     allstations = allstations.apply(
         lambda col: col.str.strip() if col.dtype == "object" else col
     )
+    allstations = _clean_columns(allstations)
 
-    row2 = allstations.loc[allstations["station_id"] == str(station_id)]
-    if not row2.empty:
-        return row2.iloc[0].to_dict()
+    # Standardize expected names
+    allstations = allstations.rename(
+        columns={
+            "station_number": "station_id",
+            "station_name": "name",
+            "latitude": "lat",
+            "longitude": "lon",
+        }
+    )
 
-    return None
+    # ---------------------------------------------------------
+    # Merge StnDet + Excel metadata
+    # ---------------------------------------------------------
+    merged = stndet.merge(
+        allstations,
+        on="station_id",
+        how="left",
+        suffixes=("", "_alt"),
+    )
+
+    # Safe fallback fill for key fields
+    for col in ["lat", "lon", "name"]:
+        alt = f"{col}_alt"
+        if alt in merged.columns:
+            merged[col] = merged[col].fillna(merged[alt])
+
+    # Drop alt columns
+    merged = merged[[c for c in merged.columns if not c.endswith("_alt")]]
+
+    return merged
+
+
+def resolve_station_metadata(station_id, metadata_df):
+    """
+    Return metadata row as a dict for a given station_id.
+    """
+    row = metadata_df.loc[metadata_df["station_id"] == str(station_id)]
+    if row.empty:
+        return None
+    return row.iloc[0].to_dict()

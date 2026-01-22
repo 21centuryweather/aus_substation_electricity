@@ -17,7 +17,12 @@ def load_single_year_file(csv_path, metadata_df):
     df[time_col] = pd.to_datetime(df[time_col], errors="coerce")
     df = df.dropna(subset=[time_col])
     df = df.drop_duplicates(subset=[time_col])
+
+    # Set index
     df = df.set_index(time_col)
+
+    #ensure monotonic index for rolling()
+    df = df.sort_index()
 
     # Drop irrelevant columns
     df = df.drop(columns=["EndDeliveryTime", "UtilityName"], errors="ignore")
@@ -83,6 +88,8 @@ def process_DNSP_years(
     fill_small_gaps=True,
     max_gap=4
 ):
+    import re
+
     print(f"\n--- Starting DNSP: {dnspsubfolder} ---")
 
     # Setup paths
@@ -92,39 +99,66 @@ def process_DNSP_years(
 
     # Load metadata
     metadata_df = pd.read_csv(metadata_path)
+
+    # Standardize ID column
     if "Zone Substation ID" in metadata_df.columns:
         metadata_df = metadata_df.rename(columns={"Zone Substation ID": "ID"})
 
-    # Save metadata once
-    metadata_df[metadata_df["Distribution Network Service Provider"] == dnspsubfolder.split("_")[0]].to_csv(
-        output_dir / f"{dnspsubfolder}_metadata.csv", index=False
+    # -------------------------------
+    # Metadata matching (robust)
+    # -------------------------------
+    raw_name = dnspsubfolder.split("_")[0]
+
+    # Convert camelCase → spaced (UnitedEnergy → United Energy)
+    raw_name_spaced = re.sub(r"([a-z])([A-Z])", r"\1 \2", raw_name)
+
+    # Fuzzy match
+    mask = metadata_df["Distribution Network Service Provider"].str.contains(
+        raw_name_spaced, case=False, na=False
     )
 
+    matched_meta = metadata_df[mask].copy()
+
+    # Save metadata
+    meta_out = output_dir / f"{dnspsubfolder}_metadata.csv"
+    matched_meta.to_csv(meta_out, index=False)
+
+    print(f"  Matched {len(matched_meta)} metadata rows for '{raw_name_spaced}'")
+    if len(matched_meta) == 0:
+        print("  WARNING: No metadata matched — check naming")
+
+    # -------------------------------
     # Process each CSV file
+    # -------------------------------
     csv_files = sorted(input_dir.glob("*.csv"))
+
     for csv_file in csv_files:
         print(f"\nProcessing file: {csv_file.name}")
 
-        # Extract year using regex
+        # Extract year
         match = re.search(r"(20\d{2})", csv_file.name)
         if not match:
             print(f"  Skipping {csv_file.name} — no year found")
             continue
         year = match.group(1)
 
-        # Load and clean
-        df, meta = load_single_year_file(csv_file, metadata_df)
+        # Load and clean raw file
+        df, meta_subset = load_single_year_file(csv_file, metadata_df)
 
+        # Cleaning steps
         if sigma is not None:
             df = clean_data_sigma(df, sigma=sigma)
+
         if remove_constant:
             df = clean_data_constant(df)
+
         if fill_small_gaps:
             df = fill_gaps_df(df, max_gap=max_gap)
 
         # Save cleaned output
         out_path = output_dir / f"{dnspsubfolder}_{year}_cleaned.csv"
         df.to_csv(out_path)
+
         print(f"  Saved cleaned file: {out_path.name}")
 
 
