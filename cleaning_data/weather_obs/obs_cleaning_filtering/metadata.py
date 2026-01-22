@@ -33,11 +33,11 @@ def _clean_columns(df):
 
 def load_station_metadata(stndet_path):
     """
-    Load StnDet metadata (no header) and merge with the Excel metadata file.
+    Load StnDet metadata (no header) and merge with Excel metadata.
     Ensures:
         - station_id is consistent
         - lat/lon/name always present when available
-        - column names cleaned and standardized
+        - Excel-only stations are included (outer join)
     """
 
     # ---------------------------------------------------------
@@ -95,11 +95,12 @@ def load_station_metadata(stndet_path):
 
     # ---------------------------------------------------------
     # Merge StnDet + Excel metadata
+    # OUTER JOIN ensures Excel-only stations are included
     # ---------------------------------------------------------
     merged = stndet.merge(
         allstations,
         on="station_id",
-        how="left",
+        how="outer",
         suffixes=("", "_alt"),
     )
 
@@ -118,8 +119,14 @@ def load_station_metadata(stndet_path):
 def resolve_station_metadata(station_id, metadata_df):
     """
     Return metadata row as a dict for a given station_id.
+    Works for:
+        - StnDet stations
+        - Excel-only stations
     """
-    row = metadata_df.loc[metadata_df["station_id"] == str(station_id)]
+    station_id = str(station_id)
+    row = metadata_df.loc[metadata_df["station_id"] == station_id]
+
     if row.empty:
         return None
+
     return row.iloc[0].to_dict()

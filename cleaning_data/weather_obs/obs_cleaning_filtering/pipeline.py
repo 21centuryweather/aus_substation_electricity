@@ -21,7 +21,7 @@ def process_file(path, output_dir, metadata_df):
 
     meta = resolve_station_metadata(station_id, metadata_df)
     if meta is None:
-        print(f"Skipping {path.name}: station ID {station_id} not in metadata")
+        print(f"WARNING: {path.name} → station ID {station_id} not found in ANY metadata source")
         return
 
     station_name = meta.get("name", "unknown_station")
