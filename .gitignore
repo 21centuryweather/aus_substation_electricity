@@ -1,6 +1,8 @@
 data/ausgrid/*.csv
 data/ausgrid/ausgrid.zip
 data/*
+figures/*
+!.gitkeep
 
 
 # Byte-compiled / optimized / DLL files
