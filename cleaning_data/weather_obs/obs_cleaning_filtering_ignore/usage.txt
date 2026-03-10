@@ -1,0 +1,11 @@
+How to use obs_cleaning_filtering files to clean weather station data in steps to not crash laptop/gadi session
+
+1. input_output.py
+    - Handles the inputs and outputs
+    - loads the raw files (txt, zip, csv) individually
+    - handles the data in chunks rather than all at once
+    - extracts basic information
+        - station ID from file name
+        - file name
+
+2. cleaning.py
