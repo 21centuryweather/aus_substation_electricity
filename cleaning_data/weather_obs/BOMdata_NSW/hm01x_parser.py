@@ -12,7 +12,7 @@ Author: Pia
 import pandas as pd
 from pathlib import Path
 
-from .utils import (
+from utils import (
     parse_local_timestamp,
     apply_quality_mask,
 )
@@ -148,4 +148,3 @@ def parse_hm01x_file(filepath):
     df["precip_since_9am"] = apply_quality_mask(df["precip_since_9am"], df["q_precip"])
 
     return df.reset_index(drop=True)
-wri

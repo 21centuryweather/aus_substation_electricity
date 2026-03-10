@@ -14,11 +14,12 @@ Author: Pia
 
 import pandas as pd
 from pathlib import Path
+from tqdm import tqdm
 
-from .hm01x_parser import parse_hm01x_file
-from .rainfall_conversion import add_rainfall_per_observation, drop_cumulative_rainfall
-from .resampling import resample_to_30min
-from .utils import ensure_dir, list_hm01x_files
+from hm01x_parser import parse_hm01x_file
+from rainfall_conversion import add_rainfall_per_observation, drop_cumulative_rainfall
+from resampling import resample_to_30min
+from utils import ensure_dir, list_hm01x_files
 
 
 # ---------------------------------------------------------------------
@@ -39,6 +40,10 @@ def process_single_file(filepath):
         Cleaned, resampled weather data for this file.
     """
     df = parse_hm01x_file(filepath)
+    # Skip files that failed to parse or have no datetime column
+    if df is None or df.empty or "datetime_local" not in df.columns:
+        print(f"Skipping file with no datetime_local: {filepath}")
+        return pd.DataFrame()
 
     if df.empty:
         return df
@@ -68,8 +73,8 @@ def process_station_directory(station_dir, output_dir):
 
     Returns
     -------
-    Path
-        Path to the station-level CSV.
+    Path or None
+        Path to the station-level CSV, or None if no data.
     """
     station_dir = Path(station_dir)
     output_dir = Path(output_dir)
@@ -79,12 +84,15 @@ def process_station_directory(station_dir, output_dir):
     if not files:
         return None
 
-    station_id = files[0].name.split("_")[-1].split(".")[0]  # last numeric chunk
+    # Extract station ID from the first file name
+    station_id = files[0].name.split("_")[2]
+
     out_path = output_dir / f"weather_station_{station_id}.csv"
 
-    # Process each file incrementally
     chunks = []
-    for f in files:
+
+    # Progress bar for files within this station
+    for f in tqdm(files, desc=f"Station {station_id}", unit="file", leave=False):
         df = process_single_file(f)
         if not df.empty:
             chunks.append(df)
@@ -92,7 +100,7 @@ def process_station_directory(station_dir, output_dir):
     if not chunks:
         return None
 
-    # Concatenate all processed files for this station
+    # Combine all processed files for this station
     station_df = pd.concat(chunks, ignore_index=True)
 
     # Sort and drop duplicates
@@ -121,15 +129,15 @@ def append_to_master(station_csv, master_csv):
     station_csv = Path(station_csv)
     master_csv = Path(master_csv)
 
-    # If master doesn't exist, copy headers + data
+    # If master doesn't exist, write with header
     if not master_csv.exists():
-        station_df = pd.read_csv(station_csv)
-        station_df.to_csv(master_csv, index=False)
+        df = pd.read_csv(station_csv)
+        df.to_csv(master_csv, index=False)
         return
 
-    # Append without headers
-    station_df = pd.read_csv(station_csv)
-    station_df.to_csv(master_csv, mode="a", header=False, index=False)
+    # Append without header
+    df = pd.read_csv(station_csv)
+    df.to_csv(master_csv, mode="a", header=False, index=False)
 
 
 # ---------------------------------------------------------------------
@@ -162,7 +170,8 @@ def process_all_stations(root_dir, output_dir, master_csv=None):
 
     outputs = []
 
-    for sd in station_dirs:
+    # Progress bar for stations
+    for sd in tqdm(station_dirs, desc="Processing stations", unit="station"):
         station_csv = process_station_directory(sd, output_dir)
         if station_csv:
             outputs.append(station_csv)
@@ -170,4 +179,3 @@ def process_all_stations(root_dir, output_dir, master_csv=None):
                 append_to_master(station_csv, master_csv)
 
     return outputs
-d
